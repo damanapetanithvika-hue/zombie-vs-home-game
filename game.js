@@ -3,7 +3,9 @@ const ctx = canvas.getContext("2d");
 const healthEl = document.getElementById("homeHealth");
 const scoreEl = document.getElementById("score");
 const waveEl = document.getElementById("wave");
+const powerEl = document.getElementById("powerLevel");
 const messageEl = document.getElementById("message");
+const upgradeBtn = document.getElementById("upgradeBtn");
 
 const home = {
   x: canvas.width / 2,
@@ -19,6 +21,10 @@ const player = {
   speed: 3.4,
   angle: 0,
   cooldown: 0,
+  level: 1,
+  damage: 1,
+  fireRate: 180,
+  bonus: 0,
 };
 
 const bullets = [];
@@ -32,6 +38,42 @@ let lastTime = 0;
 let spawnTimer = 0;
 let started = false;
 let gameOver = false;
+let audioCtx = null;
+
+function initAudio() {
+  if (!audioCtx) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      audioCtx = new AudioContextClass();
+    }
+  }
+}
+
+function playTone(frequency, duration = 0.08, type = "triangle", volume = 0.03) {
+  if (!audioCtx) return;
+
+  try {
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    oscillator.type = type;
+    oscillator.frequency.value = frequency;
+
+    gainNode.gain.value = volume;
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + duration);
+  } catch (error) {
+    // Ignore audio errors silently in unsupported environments.
+  }
+}
+
+function getUpgradeCost() {
+  return 50 + (player.level - 1) * 35;
+}
 
 function setMessage(title, text, visible = true) {
   messageEl.innerHTML = `<h2>${title}</h2><p>${text}</p>`;
@@ -49,6 +91,9 @@ function resetGame() {
   player.x = canvas.width / 2;
   player.y = canvas.height - 110;
   player.cooldown = 0;
+  player.level = 1;
+  player.damage = 1;
+  player.fireRate = 180;
   score = 0;
   wave = 1;
   bullets.length = 0;
@@ -64,6 +109,37 @@ function updateHud() {
   healthEl.textContent = Math.max(0, home.health);
   scoreEl.textContent = score;
   waveEl.textContent = wave;
+  powerEl.textContent = player.level;
+  const upgradeCost = getUpgradeCost();
+  upgradeBtn.textContent = `Upgrade (${upgradeCost})`;
+  upgradeBtn.disabled = !started || gameOver || score < upgradeCost;
+}
+
+function upgradePlayer() {
+  const cost = getUpgradeCost();
+
+  if (!started || gameOver) {
+    setMessage("Need to start", "The game must be running before you can upgrade.", true);
+    return;
+  }
+
+  if (score < cost) {
+    setMessage("Not enough score", `You need ${cost} score to upgrade your weapon.`, true);
+    return;
+  }
+
+  score -= cost;
+  player.level += 1;
+  player.damage += 1;
+  player.fireRate = Math.max(85, player.fireRate - 18);
+  playTone(520, 0.1, "square", 0.05);
+  setMessage("Weapon upgraded", `Power level ${player.level}! Fire rate improved and damage increased.`, true);
+  setTimeout(() => {
+    if (started && !gameOver) {
+      messageEl.classList.remove("visible");
+    }
+  }, 1000);
+  updateHud();
 }
 
 function movePlayer() {
@@ -89,14 +165,17 @@ function shoot() {
   if (!started || gameOver) return;
   if (player.cooldown > 0) return;
 
-  player.cooldown = 180;
+  player.cooldown = player.fireRate;
+  initAudio();
+  playTone(220, 0.05, "square", 0.04);
 
   bullets.push({
     x: player.x + Math.cos(player.angle) * 18,
     y: player.y + Math.sin(player.angle) * 18,
     dx: Math.cos(player.angle) * 7.5,
     dy: Math.sin(player.angle) * 7.5,
-    radius: 4,
+    radius: 4 + player.damage * 0.5,
+    damage: player.damage,
   });
 }
 
@@ -104,6 +183,8 @@ function spawnZombie() {
   const side = Math.floor(Math.random() * 4);
   let x = 0;
   let y = 0;
+  const typeRoll = Math.random();
+  const type = typeRoll < 0.72 ? "walker" : typeRoll < 0.92 ? "runner" : "brute";
 
   if (side === 0) {
     x = Math.random() * canvas.width;
@@ -119,11 +200,18 @@ function spawnZombie() {
     y = Math.random() * canvas.height;
   }
 
+  const baseRadius = type === "runner" ? 10 : type === "brute" ? 18 : 13;
+  const baseHealth = type === "runner" ? 1 : type === "brute" ? 4 : 2;
+  const baseSpeed = type === "runner" ? 1.65 + wave * 0.2 : type === "brute" ? 0.8 + wave * 0.14 : 1.0 + wave * 0.18;
+
   zombies.push({
     x,
     y,
-    radius: 12 + Math.random() * 6,
-    speed: 0.82 + wave * 0.18 + Math.random() * 0.35,
+    radius: baseRadius,
+    speed: baseSpeed,
+    health: baseHealth,
+    maxHealth: baseHealth,
+    type,
   });
 }
 
@@ -150,9 +238,15 @@ function updateBullets() {
       const dist = Math.hypot(dx, dy);
 
       if (dist < bullet.radius + zombie.radius) {
-        zombies.splice(j, 1);
+        zombie.health -= bullet.damage;
         bullets.splice(i, 1);
-        score += 10;
+
+        if (zombie.health <= 0) {
+          zombies.splice(j, 1);
+          const reward = zombie.type === "brute" ? 25 : zombie.type === "runner" ? 15 : 10;
+          score += reward;
+          playTone(380, 0.07, "sawtooth", 0.02);
+        }
         break;
       }
     }
@@ -175,7 +269,9 @@ function updateZombies() {
 
     if (dist < home.radius + zombie.radius) {
       zombies.splice(i, 1);
-      home.health -= 10;
+      home.health -= zombie.type === "brute" ? 20 : zombie.type === "runner" ? 12 : 10;
+      playTone(120, 0.1, "sawtooth", 0.04);
+
       if (home.health <= 0) {
         home.health = 0;
         gameOver = true;
@@ -199,7 +295,7 @@ function update(dt) {
     updateWave();
 
     spawnTimer -= dt;
-    const spawnInterval = Math.max(350, 1150 - wave * 55);
+    const spawnInterval = Math.max(300, 1150 - wave * 55);
     if (spawnTimer <= 0) {
       const count = 1 + Math.min(4, Math.floor(wave / 2));
       for (let i = 0; i < count; i++) {
@@ -218,7 +314,6 @@ function drawBackground() {
   ctx.fillStyle = "#294d33";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Ground details
   for (let i = 0; i < 15; i++) {
     ctx.fillStyle = i % 2 === 0 ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.03)";
     ctx.fillRect(i * 72, 0, 20, canvas.height);
@@ -235,7 +330,6 @@ function drawHome() {
   ctx.fillRect(home.x - 20, home.y - 18, 40, 36);
   ctx.fillRect(home.x - 8, home.y - 4, 16, 26);
 
-  // Health ring
   ctx.strokeStyle = "rgba(255,255,255,0.4)";
   ctx.lineWidth = 2;
   ctx.beginPath();
@@ -272,12 +366,31 @@ function drawBullets() {
   }
 }
 
+function drawZombieHealth(zombie) {
+  const width = zombie.radius * 2;
+  const x = zombie.x - zombie.radius;
+  const y = zombie.y - zombie.radius - 12;
+
+  ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+  ctx.fillRect(x, y, width, 5);
+
+  ctx.fillStyle = zombie.type === "brute" ? "#f87171" : zombie.type === "runner" ? "#fbbf24" : "#4ade80";
+  ctx.fillRect(x, y, (zombie.health / zombie.maxHealth) * width, 5);
+}
+
 function drawZombies() {
-  ctx.fillStyle = "#79c06b";
   for (const zombie of zombies) {
+    const colors = {
+      walker: "#79c06b",
+      runner: "#fbbf24",
+      brute: "#ef4444",
+    };
+
+    ctx.fillStyle = colors[zombie.type] || "#79c06b";
     ctx.beginPath();
     ctx.arc(zombie.x, zombie.y, zombie.radius, 0, Math.PI * 2);
     ctx.fill();
+    drawZombieHealth(zombie);
   }
 }
 
@@ -323,7 +436,13 @@ canvas.addEventListener("mousemove", (event) => {
 });
 
 canvas.addEventListener("click", () => {
+  initAudio();
   shoot();
+});
+
+upgradeBtn.addEventListener("click", () => {
+  initAudio();
+  upgradePlayer();
 });
 
 window.addEventListener("blur", () => {
@@ -334,4 +453,3 @@ window.addEventListener("blur", () => {
 
 resetGame();
 requestAnimationFrame(loop);
-

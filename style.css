@@ -105,6 +105,31 @@ strong {
   line-height: 1.1;
 }
 
+.upgrade-btn {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: linear-gradient(135deg, #f59e0b, #f97316);
+  border: none;
+  border-radius: 12px;
+  color: white;
+  font-weight: 700;
+  padding: 10px 14px;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(245, 158, 11, 0.35);
+  transition: transform 0.18s ease, filter 0.18s ease;
+}
+
+.upgrade-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+.upgrade-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .message {
   position: absolute;
   inset: 0;
@@ -140,6 +165,14 @@ strong {
   .hud {
     gap: 10px;
     padding: 8px 10px;
+    flex-wrap: wrap;
+    max-width: calc(100% - 20px);
+  }
+
+  .upgrade-btn {
+    top: auto;
+    bottom: 14px;
+    right: 14px;
   }
 
   strong {
